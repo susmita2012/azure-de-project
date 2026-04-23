@@ -1,0 +1,9 @@
+{
+	"name": "shopifyfactory1979",
+	"location": "eastus",
+	"identity": {
+		"type": "SystemAssigned",
+		"principalId": "11c1d757-0cdd-4dbc-a352-b2019eee8ea0",
+		"tenantId": "e1ed12a1-b64d-4698-8880-1a3f6a573c42"
+	}
+}
