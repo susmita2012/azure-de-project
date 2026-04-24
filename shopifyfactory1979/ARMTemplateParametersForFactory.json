@@ -1,0 +1,27 @@
+{
+	"$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+	"contentVersion": "1.0.0.0",
+	"parameters": {
+		"factoryName": {
+			"value": "shopifyfactory1979"
+		},
+		"LS_ADLS_accountKey": {
+			"value": ""
+		},
+		"LS_SQL_DB_password": {
+			"value": ""
+		},
+		"LS_ADLS_properties_typeProperties_url": {
+			"value": "https://shopifyprojectstorage.dfs.core.windows.net/"
+		},
+		"LS_SQL_DB_properties_typeProperties_server": {
+			"value": "shopifyserver1979.database.windows.net"
+		},
+		"LS_SQL_DB_properties_typeProperties_database": {
+			"value": "shopifydb"
+		},
+		"LS_SQL_DB_properties_typeProperties_userName": {
+			"value": "susmita"
+		}
+	}
+}
