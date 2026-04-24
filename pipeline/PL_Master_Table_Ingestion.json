@@ -1,0 +1,403 @@
+{
+	"name": "PL_Master_Table_Ingestion",
+	"properties": {
+		"activities": [
+			{
+				"name": "Lookup_Control_Table",
+				"type": "Lookup",
+				"dependsOn": [],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderQuery": {
+							"value": "@concat('select * from ', pipeline().parameters.config_table_schema, '.', pipeline().parameters.config_table, ' where is_active = 1 ')",
+							"type": "Expression"
+						},
+						"queryTimeout": "02:00:00",
+						"partitionOption": "None"
+					},
+					"dataset": {
+						"referenceName": "DS_SQL_DB",
+						"type": "DatasetReference"
+					},
+					"firstRowOnly": false
+				}
+			},
+			{
+				"name": "ForEach1",
+				"type": "ForEach",
+				"dependsOn": [
+					{
+						"activity": "Lookup_Control_Table",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"items": {
+						"value": "@activity('Lookup_Control_Table').output.value",
+						"type": "Expression"
+					},
+					"batchCount": 2,
+					"activities": [
+						{
+							"name": "If_New_Data_Exists",
+							"type": "IfCondition",
+							"dependsOn": [
+								{
+									"activity": "Lookup_Check_New_Data",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"userProperties": [],
+							"typeProperties": {
+								"expression": {
+									"value": "@greater(activity('Lookup_Check_New_Data').output.firstRow.row_count, 0)",
+									"type": "Expression"
+								},
+								"ifFalseActivities": [
+									{
+										"name": "Log_No_Data",
+										"type": "Script",
+										"dependsOn": [],
+										"policy": {
+											"timeout": "0.12:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"linkedServiceName": {
+											"referenceName": "LS_SQL_DB",
+											"type": "LinkedServiceReference"
+										},
+										"typeProperties": {
+											"scripts": [
+												{
+													"type": "Query",
+													"text": {
+														"value": "@concat(\n'UPDATE ingestion_log SET status = ''NO_DATA'', end_time = GETDATE() ',\n'WHERE table_name = ''',\nitem().table_name,\n''' AND run_id = ''',\nvariables('run_id'),\n''''\n)",
+														"type": "Expression"
+													}
+												}
+											],
+											"scriptBlockExecutionTimeout": "02:00:00"
+										}
+									}
+								],
+								"ifTrueActivities": [
+									{
+										"name": "Copy_SQL_to_ADLS",
+										"type": "Copy",
+										"dependsOn": [],
+										"policy": {
+											"timeout": "0.12:00:00",
+											"retry": 3,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"source": {
+												"type": "AzureSqlSource",
+												"sqlReaderQuery": {
+													"value": "@concat(\n'SELECT * FROM ',\nitem().schema_name, '.', item().table_name,\n' WHERE ',\nitem().watermark_column, ' > ''',\nitem().last_watermark_value, ''''\n)",
+													"type": "Expression"
+												},
+												"queryTimeout": "02:00:00",
+												"partitionOption": "None"
+											},
+											"sink": {
+												"type": "ParquetSink",
+												"storeSettings": {
+													"type": "AzureBlobFSWriteSettings"
+												},
+												"formatSettings": {
+													"type": "ParquetWriteSettings"
+												}
+											},
+											"enableStaging": false,
+											"translator": {
+												"type": "TabularTranslator",
+												"typeConversion": true,
+												"typeConversionSettings": {
+													"allowDataTruncation": true,
+													"treatBooleanAsNumber": false
+												}
+											}
+										},
+										"inputs": [
+											{
+												"referenceName": "DS_SQL_DB",
+												"type": "DatasetReference"
+											}
+										],
+										"outputs": [
+											{
+												"referenceName": "DS_SINK_PARQUET",
+												"type": "DatasetReference",
+												"parameters": {
+													"container": "bronze",
+													"folder": {
+														"value": "@concat(\nitem().table_name,\n'/year=', formatDateTime(utcNow(),'yyyy'),\n'/month=', formatDateTime(utcNow(),'MM'),\n'/day=', formatDateTime(utcNow(),'dd')\n)",
+														"type": "Expression"
+													},
+													"file": {
+														"value": "@concat(item().table_name, '_', formatDateTime(utcNow(),'HHmmss'), '.parquet')",
+														"type": "Expression"
+													}
+												}
+											}
+										]
+									},
+									{
+										"name": "Lookup_Max_Watermark",
+										"type": "Lookup",
+										"dependsOn": [
+											{
+												"activity": "Copy_SQL_to_ADLS",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.12:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"source": {
+												"type": "AzureSqlSource",
+												"sqlReaderQuery": {
+													"value": "@concat(\n'SELECT COALESCE(MAX(',\nitem().watermark_column,\n'), ''',\nitem().last_watermark_value,\n''') AS max_wm_value FROM ',\nitem().schema_name, '.', item().table_name\n)",
+													"type": "Expression"
+												},
+												"queryTimeout": "02:00:00",
+												"partitionOption": "None"
+											},
+											"dataset": {
+												"referenceName": "DS_SQL_DB",
+												"type": "DatasetReference"
+											}
+										}
+									},
+									{
+										"name": "SP_Update_Watermark",
+										"type": "SqlServerStoredProcedure",
+										"dependsOn": [
+											{
+												"activity": "Lookup_Max_Watermark",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.12:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"storedProcedureName": "[dbo].[usp_update_watermark]",
+											"storedProcedureParameters": {
+												"max_value": {
+													"value": {
+														"value": "@activity('Lookup_Max_Watermark').output.firstRow.max_wm_value",
+														"type": "Expression"
+													},
+													"type": "String"
+												},
+												"table_name": {
+													"value": {
+														"value": "@concat(item().schema_name, '.', item().table_name)",
+														"type": "Expression"
+													},
+													"type": "String"
+												}
+											}
+										},
+										"linkedServiceName": {
+											"referenceName": "LS_SQL_DB",
+											"type": "LinkedServiceReference"
+										}
+									},
+									{
+										"name": "Log_Failure",
+										"type": "Script",
+										"dependsOn": [
+											{
+												"activity": "Copy_SQL_to_ADLS",
+												"dependencyConditions": [
+													"Failed"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.12:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"linkedServiceName": {
+											"referenceName": "LS_SQL_DB",
+											"type": "LinkedServiceReference"
+										},
+										"typeProperties": {
+											"scripts": [
+												{
+													"type": "Query",
+													"text": {
+														"value": "@concat(\n'UPDATE ingestion_log SET status = ''FAILED'', error_message = ''',\nactivity('Copy_SQL_to_ADLS').error.message,\n''', end_time = GETDATE() ',\n'WHERE table_name = ''',\nitem().table_name,\n''' AND run_id = ''',\nvariables('run_id'),\n''''\n)",
+														"type": "Expression"
+													}
+												}
+											],
+											"scriptBlockExecutionTimeout": "02:00:00"
+										}
+									},
+									{
+										"name": "Log_Success",
+										"type": "Script",
+										"dependsOn": [
+											{
+												"activity": "SP_Update_Watermark",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "0.12:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"linkedServiceName": {
+											"referenceName": "LS_SQL_DB",
+											"type": "LinkedServiceReference"
+										},
+										"typeProperties": {
+											"scripts": [
+												{
+													"type": "Query",
+													"text": "@concat(\n'UPDATE ingestion_log SET status = ''SUCCESS'', end_time = GETDATE() ',\n'WHERE table_name = ''',\nitem().table_name,\n''' AND run_id = ''',\nvariables('run_id'),\n''''\n)"
+												}
+											],
+											"scriptBlockExecutionTimeout": "02:00:00"
+										}
+									}
+								]
+							}
+						},
+						{
+							"name": "Lookup_Check_New_Data",
+							"type": "Lookup",
+							"dependsOn": [
+								{
+									"activity": "Log_Start",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"source": {
+									"type": "AzureSqlSource",
+									"sqlReaderQuery": {
+										"value": "@concat(\n'SELECT COUNT(1) AS row_count FROM ',\nitem().schema_name, '.', item().table_name,\n' WHERE ',\nitem().watermark_column, ' > ''',\nitem().last_watermark_value, ''''\n)",
+										"type": "Expression"
+									},
+									"queryTimeout": "02:00:00",
+									"partitionOption": "None"
+								},
+								"dataset": {
+									"referenceName": "DS_SQL_DB",
+									"type": "DatasetReference"
+								},
+								"firstRowOnly": true
+							}
+						},
+						{
+							"name": "Log_Start",
+							"type": "Script",
+							"dependsOn": [],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"linkedServiceName": {
+								"referenceName": "LS_SQL_DB",
+								"type": "LinkedServiceReference"
+							},
+							"typeProperties": {
+								"scripts": [
+									{
+										"type": "Query",
+										"text": {
+											"value": "@concat(\n'INSERT INTO ingestion_log (table_name, schema_name, run_id, status, start_time) VALUES (''',\nitem().table_name, ''',''',\nitem().schema_name, ''',''',\nvariables('run_id'),\n''',''STARTED'', GETDATE())'\n)",
+											"type": "Expression"
+										}
+									}
+								],
+								"scriptBlockExecutionTimeout": "02:00:00"
+							}
+						}
+					]
+				}
+			}
+		],
+		"parameters": {
+			"config_table_schema": {
+				"type": "string",
+				"defaultValue": "dbo"
+			},
+			"config_table": {
+				"type": "string",
+				"defaultValue": "ingestion_control"
+			}
+		},
+		"variables": {
+			"run_id": {
+				"type": "String"
+			}
+		},
+		"annotations": []
+	}
+}
